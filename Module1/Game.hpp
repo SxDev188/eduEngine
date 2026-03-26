@@ -106,10 +106,11 @@ private:
     // Game entity AABBs (for collision detection or visualization)
     eeng::AABB character_aabb1, character_aabb2, character_aabb3, horse_aabb, grass_aabb;
 
-    // Placeholder animation state
-    int characterAnimIndex = -1;
+    // Placeholder animation demo state
+    int middleCharacterAnimIndex = 1;
     float characterAnimSpeed = 1.0f;
-    float characterAnimBlend = 0.5f;
+    float leftCharacterAnimBlend = 0.5f;
+    bool rightCharacterSubtreeUsesWave = true;
 
     // Stats
     int drawcallCount = 0;

@@ -111,18 +111,23 @@ void Game::update(
         { 0.03f, 0.03f, 0.03f });
 
     // Intersect player view ray with AABBs of other objects 
+    // Intersection results are stored in the ray's point_of_contact and can be used for picking, shooting, etc.
     glm_aux::intersect_ray_AABB(player.viewRay, character_aabb2.min, character_aabb2.max);
     glm_aux::intersect_ray_AABB(player.viewRay, character_aabb3.min, character_aabb3.max);
     glm_aux::intersect_ray_AABB(player.viewRay, horse_aabb.min, horse_aabb.max);
 
-    // We can also compute a ray from the current mouse position,
-    // to use for object picking and such ...
+    // We can also compute a ray from the current mouse position picking etc
+    // Let's try it: if the left mouse button is pressed, 
+    // compute a ray from the camera through the mouse cursor and log it
     if (input->GetMouseState().rightButton)
     {
+        // Note: mouse Y is typically inverted in window coordinates, so we flip it here to get the correct ray direction
         glm::ivec2 windowPos(camera.mouse_xy_prev.x, matrices.windowSize.y - camera.mouse_xy_prev.y);
+        
+        // Compute a ray from the camera through the mouse cursor
         auto ray = glm_aux::world_ray_from_window_coords(windowPos, matrices.V, matrices.P, matrices.VP);
-        // Intersect with e.g. AABBs ...
-
+        
+        // Now we can use the ray for picking, intersection tests, etc. For now, let's just log it.
         eeng::Log("Picking ray origin = %s, dir = %s",
             glm_aux::to_string(ray.origin).c_str(),
             glm_aux::to_string(ray.dir).c_str());
@@ -141,12 +146,10 @@ void Game::render(
     // Projection matrix
     const float aspectRatio = float(windowWidth) / windowHeight;
     matrices.P = glm::perspective(glm::radians(60.0f), aspectRatio, camera.nearPlane, camera.farPlane);
-
     // View matrix
     matrices.V = glm::lookAt(camera.pos, camera.lookAt, camera.up);
-
+    // Viewport matrix
     matrices.VP = glm_aux::create_viewport_matrix(0.0f, 0.0f, windowWidth, windowHeight, 0.0f, 1.0f);
-
     // Begin rendering pass
     forwardRenderer->beginPass(matrices.P, matrices.V, pointlight.pos, pointlight.color, camera.pos);
 
@@ -159,33 +162,33 @@ void Game::render(
     forwardRenderer->renderMesh(horseMesh, horseWorldMatrix);
     horse_aabb = horseMesh->m_model_aabb.post_transform(horseWorldMatrix);
 
-    // Character, instance 1
-    characterMesh->animate(characterAnimIndex, time * characterAnimSpeed);
+    // Character, instance 1 (middle, moving) - single clip demo
+    characterMesh->animate(middleCharacterAnimIndex, time * characterAnimSpeed);
     forwardRenderer->renderMesh(characterMesh, characterWorldMatrix1);
     character_aabb1 = characterMesh->m_model_aabb.post_transform(characterWorldMatrix1);
 
-    // Character, instance 2
-    characterMesh->animate(1, time * characterAnimSpeed);
+    // Character, instance 2 (left) - two-clip full-body blend
+    // Explanation: Both 'idle' and 'walk' clips are applied to the entire skeleton with a blend factor.
+    characterMesh->animateBlend(1, 2, time, time, leftCharacterAnimBlend);
     forwardRenderer->renderMesh(characterMesh, characterWorldMatrix2);
     character_aabb2 = characterMesh->m_model_aabb.post_transform(characterWorldMatrix2);
 
-    // Character, instance 3
-    // characterMesh->animate(2, time * characterAnimSpeed);
-#if 0
+    // Character, instance 3 (right) - filtered walk + wave
+    // Explanation: Nodes in the "mixamorig:Spine" branch (upper body) gets the 'wave' clip, while the rest (lower body) gets the 'walk' clip.
     eeng::AnimationBranchDesc upperBodyFilter;
     upperBodyFilter.root_node_name = "mixamorig:Spine";
-    upperBodyFilter.mode = eeng::AnimationBranchDesc::Mode::ExcludeSubtree;
-    characterMesh->animateBlend(3, 2, time, time, upperBodyFilter);
-#else
-    characterMesh->animateBlend(1, 2, time, time, characterAnimBlend);
-#endif
+    upperBodyFilter.mode = rightCharacterSubtreeUsesWave
+        ? eeng::AnimationBranchDesc::Mode::IncludeSubtree
+        : eeng::AnimationBranchDesc::Mode::ExcludeSubtree;
+    characterMesh->animateBlend(2 /* walk */, 3 /* wave */, time, time, upperBodyFilter);
     forwardRenderer->renderMesh(characterMesh, characterWorldMatrix3);
     character_aabb3 = characterMesh->m_model_aabb.post_transform(characterWorldMatrix3);
 
     // End rendering pass
     drawcallCount = forwardRenderer->endPass();
 
-    // Draw player view ray
+    // Debug draw player view ray
+    // Green line if the ray hits an object, white line if it doesn't.
     if (player.viewRay)
     {
         shapeRenderer->push_states(ShapeRendering::Color4u{ 0xff00ff00 });
@@ -198,7 +201,7 @@ void Game::render(
     }
     shapeRenderer->pop_states<ShapeRendering::Color4u>();
 
-    // Draw object bases
+    // Debug draw object bases
     {
         shapeRenderer->push_basis_basic(characterWorldMatrix1, 1.0f);
         shapeRenderer->push_basis_basic(characterWorldMatrix2, 1.0f);
@@ -207,7 +210,7 @@ void Game::render(
         shapeRenderer->push_basis_basic(horseWorldMatrix, 1.0f);
     }
 
-    // Draw AABBs
+    // Debug draw AABBs
     {
         shapeRenderer->push_states(ShapeRendering::Color4u{ 0xFFE61A80 });
         shapeRenderer->push_AABB(character_aabb1.min, character_aabb1.max);
@@ -227,17 +230,19 @@ void Game::render(
     }
 #endif
 
-    // Draw shape batches
+    // Draw shape batches (lines etc)
     shapeRenderer->render(matrices.P * matrices.V);
     shapeRenderer->post_render();
 }
 
 void Game::renderUI()
 {
+    // Begin game info ImGui window
     ImGui::Begin("Game Info");
 
     ImGui::Text("Drawcall count %i", drawcallCount);
 
+    // Color picker for light color
     if (ImGui::ColorEdit3("Light color",
         glm::value_ptr(pointlight.color),
         ImGuiColorEditFlags_NoInputs))
@@ -247,12 +252,12 @@ void Game::renderUI()
     if (characterMesh)
     {
         ImGui::Separator();
-        ImGui::Text("1-Clip Animation Demo");
+        ImGui::Text("Middle Character (controllable): Single Clip");
 
         // Combo (drop-down) for animation clip
-        int curAnimIndex = characterAnimIndex;
+        int curAnimIndex = middleCharacterAnimIndex;
         std::string label = (curAnimIndex == -1 ? "Bind pose" : characterMesh->getAnimationName(curAnimIndex));
-        if (ImGui::BeginCombo("Character animation##animclip", label.c_str()))
+        if (ImGui::BeginCombo("Clip##middle_animclip", label.c_str()))
         {
             // Bind pose item
             const bool isSelected = (curAnimIndex == -1);
@@ -272,23 +277,31 @@ void Game::renderUI()
                     ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
-            characterAnimIndex = curAnimIndex;
         }
+        middleCharacterAnimIndex = curAnimIndex;
+        ImGui::SliderFloat("Animation speed##middle_speed", &characterAnimSpeed, 0.1f, 5.0f);
     }
-    ImGui::SliderFloat("Animation speed", &characterAnimSpeed, 0.1f, 5.0f);
 
     ImGui::Separator();
-    ImGui::Text("2-Clip Animation Demo (Idle + Walk)");
-    ImGui::SliderFloat("Blend factor", &characterAnimBlend, 0.0f, 1.0f);
+    ImGui::Text("Left Character: 2-Clip Blend");
+    ImGui::Text("Idle (1) + Walking (2)");
+    ImGui::SliderFloat("Blend factor##left_blend", &leftCharacterAnimBlend, 0.0f, 1.0f);
+
+    ImGui::Separator();
+    ImGui::Text("Right Character: Filtered Blend");
+    ImGui::Text("Walking (2) + Waving (3)");
+    ImGui::Text("Branch root: mixamorig:Spine");
+    ImGui::Checkbox("Spine subtree uses waving", &rightCharacterSubtreeUsesWave);
 
     ImGui::End(); // end info window
 
-    // In-world position label
+    // In-world position label at horse position
     const auto VP_P_V = matrices.VP * matrices.P * matrices.V;
     auto world_pos = glm::vec3(horseWorldMatrix[3]);
     glm::ivec2 window_coords;
     if (glm_aux::window_coords_from_world_pos(world_pos, VP_P_V, window_coords))
     {
+        // Draw an ImGui label at the projected window coordinates of the horse
         ImGui::SetNextWindowPos(
             ImVec2{ float(window_coords.x), float(matrices.windowSize.y - window_coords.y) },
             ImGuiCond_Always,
