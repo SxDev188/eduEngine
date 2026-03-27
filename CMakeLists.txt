@@ -227,6 +227,7 @@ set_target_properties(Module1 PROPERTIES
 
 target_link_libraries(Module1 PRIVATE 
     SDL2 
+    sdl_mixer 
     assimp 
     libglew_static 
     glm::glm 
